@@ -1,0 +1,14 @@
+[package]
+name = "filterway"
+version = "0.1.0"
+edition = "2021"
+description = "Filter/modify Wayland messages from clients"
+readme = "readme.md"
+repository = "https://github.com/andrewbaxter/filterway"
+license = "ISC"
+
+[dependencies]
+aargvark = "0.2"
+defer = "0.2"
+libc = "0.2"
+rustix = { version = "0.38", features = ["fs"] }
