@@ -147,6 +147,23 @@ fn main() {
         let _defer1 = defer::defer(|| {
             _ = remove_file(&args.downstream);
         });
+
+        // Only track what we need - set up a dependency graph
+        let mut track_xdg_wm_base = false;
+        let mut track_xdg_surface = false;
+        let mut track_xdg_toplevel = false;
+        if args.app_id.is_some() {
+            track_xdg_toplevel = true;
+            track_xdg_surface = true;
+        }
+        if track_xdg_surface {
+            track_xdg_toplevel = true;
+        }
+        if track_xdg_toplevel {
+            track_xdg_wm_base = true;
+        }
+
+        // Listen for connections
         loop {
             let (downstream, _) = downstream.accept().context("Error accepting downstream connection")?;
             let upstream = UnixStream::connect(&args.upstream).context("Error creating upstream connection")?;
@@ -244,13 +261,15 @@ fn main() {
                                                         proto::read_arg_uint(
                                                             &mut cursor,
                                                         ).context("Error/eof reading bind object id")?;
-                                                    if let Some((want_type_id, _version)) =
-                                                        *xdgwmbase_type_id.lock().unwrap() {
-                                                        if obj_type_id == want_type_id {
-                                                            objects.insert(obj_id, ObjType::XdgWmBase {
-                                                                // prefer the magic param version because it's nearer to the use location...
-                                                                ver: version,
-                                                            });
+                                                    if track_xdg_wm_base {
+                                                        if let Some((want_type_id, _version)) =
+                                                            *xdgwmbase_type_id.lock().unwrap() {
+                                                            if obj_type_id == want_type_id {
+                                                                objects.insert(obj_id, ObjType::XdgWmBase {
+                                                                    // prefer the magic param version because it's nearer to the use location...
+                                                                    ver: version,
+                                                                });
+                                                            }
                                                         }
                                                     }
                                                 },
@@ -262,12 +281,16 @@ fn main() {
                                                 0 ..= 6 => match packet.opcode {
                                                     // Get surface
                                                     2 => {
-                                                        let mut cursor = Cursor::new(&packet.body);
-                                                        let obj_id =
-                                                            proto::read_arg_uint(
-                                                                &mut cursor,
-                                                            ).context("Error reading xdg wm base create surface id")?;
-                                                        objects.insert(obj_id, ObjType::XdgSurface { ver: ver });
+                                                        if track_xdg_surface {
+                                                            let mut cursor = Cursor::new(&packet.body);
+                                                            let obj_id =
+                                                                proto::read_arg_uint(
+                                                                    &mut cursor,
+                                                                ).context(
+                                                                    "Error reading xdg wm base create surface id",
+                                                                )?;
+                                                            objects.insert(obj_id, ObjType::XdgSurface { ver: ver });
+                                                        }
                                                     },
                                                     _ => (),
                                                 },
@@ -285,27 +308,32 @@ fn main() {
                                                 0 ..= 6 => match packet.opcode {
                                                     // Create toplevel
                                                     1 => {
-                                                        let mut cursor = Cursor::new(&packet.body);
-                                                        let obj_id =
-                                                            proto::read_arg_uint(
-                                                                &mut cursor,
-                                                            ).context(
-                                                                "Error reading xdg surface create toplevel id",
-                                                            )?;
-                                                        objects.insert(obj_id, ObjType::XdgToplevel { ver: ver });
+                                                        if track_xdg_toplevel {
+                                                            let mut cursor = Cursor::new(&packet.body);
+                                                            let obj_id =
+                                                                proto::read_arg_uint(
+                                                                    &mut cursor,
+                                                                ).context(
+                                                                    "Error reading xdg surface create toplevel id",
+                                                                )?;
+                                                            objects.insert(
+                                                                obj_id,
+                                                                ObjType::XdgToplevel { ver: ver },
+                                                            );
 
-                                                        // Set app id
-                                                        if let Some(app_id) = &args.app_id {
-                                                            let mut body = vec![];
-                                                            proto::write_arg_string(
-                                                                &mut body,
-                                                                app_id.clone(),
-                                                            ).unwrap();
-                                                            send_extra.push(proto::Packet {
-                                                                id: obj_id,
-                                                                opcode: 3,
-                                                                body: body,
-                                                            });
+                                                            // Set app id
+                                                            if let Some(app_id) = &args.app_id {
+                                                                let mut body = vec![];
+                                                                proto::write_arg_string(
+                                                                    &mut body,
+                                                                    app_id.clone(),
+                                                                ).unwrap();
+                                                                send_extra.push(proto::Packet {
+                                                                    id: obj_id,
+                                                                    opcode: 3,
+                                                                    body: body,
+                                                                });
+                                                            }
                                                         }
                                                     },
                                                     _ => (),
