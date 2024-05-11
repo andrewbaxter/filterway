@@ -168,7 +168,7 @@ fn main() {
             let (downstream, _) = downstream.accept().context("Error accepting downstream connection")?;
             let upstream = UnixStream::connect(&args.upstream).context("Error creating upstream connection")?;
 
-            #[derive(Clone, Copy)]
+            #[derive(Clone, Copy, Debug)]
             enum ObjType {
                 Display,
                 Registry,
@@ -214,19 +214,21 @@ fn main() {
                             }).context("Error reading message") ? else {
                                 break;
                             };
-                            if args.debug.is_some() {
-                                eprintln!(
-                                    "Received packet from downstream {:?}, with {} FDs",
-                                    packet,
-                                    ancillary_accum.len()
-                                );
-                            }
 
                             // Track and prepare manipulations
                             let mut suppress = false;
                             {
                                 let mut objects = objects.lock().unwrap();
-                                if let Some(o) = objects.get(&packet.id).cloned() {
+                                let o = objects.get(&packet.id).cloned();
+                                if args.debug.is_some() {
+                                    eprintln!(
+                                        "Received packet from downstream for tracked object {:?} with {} ancillary FDs: {:?}",
+                                        o,
+                                        ancillary_accum.len(),
+                                        packet
+                                    );
+                                }
+                                if let Some(o) = o {
                                     match o {
                                         ObjType::Display => {
                                             match packet.opcode {
@@ -422,7 +424,7 @@ fn main() {
                             };
                             if args.debug.is_some() {
                                 eprintln!(
-                                    "Received packet from upstream, with {} FDs: {:?}",
+                                    "Received packet from upstream with {} ancillary FDs: {:?}",
                                     ancillary_accum.len(),
                                     packet
                                 );
