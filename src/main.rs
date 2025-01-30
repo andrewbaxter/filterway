@@ -1,10 +1,10 @@
 #![feature(unix_socket_ancillary_data)]
-
 use {
     aargvark::{
         vark,
         Aargvark,
     },
+    proto::read_arg_string,
     rustix::{
         fd::{
             AsFd,
@@ -48,13 +48,20 @@ use {
 pub mod proto;
 
 #[derive(Aargvark, Clone)]
+struct AppIdArgs {
+    id: String,
+    /// Prefix the app id instead of replacing
+    prefix: Option<()>,
+}
+
+#[derive(Aargvark, Clone)]
 struct Args {
     /// Full path to primary compositor Wayland socket (like `/run/user/1000/wayland-0`)
     upstream: PathBuf,
     /// Full path for new Wayland socket
     downstream: PathBuf,
     /// Force all xdg toplevels to have the same app id
-    app_id: Option<String>,
+    app_id: Option<AppIdArgs>,
     /// Print debug messages
     debug: Option<()>,
 }
@@ -207,16 +214,15 @@ fn main() {
                         let mut ancillary_accum = vec![];
                         loop {
                             // Wait for next message
-                            let Some(packet) = proto:: read_packet(&mut AncillaryReader {
+                            let Some(mut packet) = proto::read_packet(&mut AncillaryReader {
                                 reader: &downstream,
                                 ancillary_mem: &mut ancillary_mem,
                                 fds: &mut ancillary_accum,
-                            }).context("Error reading message") ? else {
+                            }).context("Error reading message")? else {
                                 break;
                             };
 
                             // Track and prepare manipulations
-                            let mut suppress = false;
                             {
                                 let mut objects = objects.lock().unwrap();
                                 let o = objects.get(&packet.id).cloned();
@@ -322,20 +328,6 @@ fn main() {
                                                                 obj_id,
                                                                 ObjType::XdgToplevel { ver: ver },
                                                             );
-
-                                                            // Set app id
-                                                            if let Some(app_id) = &args.app_id {
-                                                                let mut body = vec![];
-                                                                proto::write_arg_string(
-                                                                    &mut body,
-                                                                    app_id.clone(),
-                                                                ).unwrap();
-                                                                send_extra.push(proto::Packet {
-                                                                    id: obj_id,
-                                                                    opcode: 3,
-                                                                    body: body,
-                                                                });
-                                                            }
                                                         }
                                                     },
                                                     _ => (),
@@ -346,10 +338,26 @@ fn main() {
                                         ObjType::XdgToplevel { ver } => {
                                             match ver {
                                                 0 ..= 6 => match packet.opcode {
-                                                    // set_app_id => block
+                                                    // set_app_id => replace
                                                     3 => {
-                                                        if args.app_id.is_some() {
-                                                            suppress = true;
+                                                        if let Some(app_id) = &args.app_id {
+                                                            let read_app_id =
+                                                                read_arg_string(
+                                                                    &mut packet.body.as_slice(),
+                                                                ).context("Error reading app id message body")?;
+                                                            packet.body.clear();
+                                                            proto::write_arg_string(
+                                                                &mut packet.body,
+                                                                if app_id.prefix.is_some() {
+                                                                    format!(
+                                                                        "{}{}",
+                                                                        app_id.id,
+                                                                        read_app_id.unwrap_or_default()
+                                                                    )
+                                                                } else {
+                                                                    app_id.id.clone()
+                                                                },
+                                                            ).unwrap();
                                                         }
                                                     },
                                                     _ => (),
@@ -362,19 +370,10 @@ fn main() {
                             }
 
                             // Forward message with retractions/additions
-                            if !suppress {
-                                proto::write_packet(
-                                    &mut AncillaryWriter::new(&mut upstream, &mut ancillary_mem, &ancillary_accum),
-                                    &packet,
-                                ).context("Error writing message")?;
-                            } else {
-                                if args.debug.is_some() {
-                                    eprintln!("Suppressed packet from upstream: {:?}", packet);
-                                }
-                                if !ancillary_accum.is_empty() {
-                                    panic!("Suppressed message with ancillary data!");
-                                }
-                            }
+                            proto::write_packet(
+                                &mut AncillaryWriter::new(&mut upstream, &mut ancillary_mem, &ancillary_accum),
+                                &packet,
+                            ).context("Error writing message")?;
                             for fd in ancillary_accum.drain(..) {
                                 drop(unsafe {
                                     OwnedFd::from_raw_fd(fd)
@@ -415,11 +414,11 @@ fn main() {
                         let mut cache_reg_id = None;
                         loop {
                             // Read next packet
-                            let Some(packet) = proto:: read_packet(&mut AncillaryReader {
+                            let Some(packet) = proto::read_packet(&mut AncillaryReader {
                                 reader: &mut upstream,
                                 ancillary_mem: &mut ancillary_mem,
                                 fds: &mut ancillary_accum,
-                            }).context("Error reading message") ? else {
+                            }).context("Error reading message")? else {
                                 break;
                             };
                             if args.debug.is_some() {
