@@ -4,8 +4,8 @@ let
   naersk = pkgs.callPackage (fetchTarball "https://github.com/nix-community/naersk/archive/378614f37a6bee5a3f2ef4f825a73d948d3ae921.zip") (
     let
       toolchain = fenix.combine [
-        fenix.nightly.rustc
-        fenix.nightly.cargo
+        fenix.latest.rustc
+        fenix.latest.cargo
       ];
     in
     {
@@ -15,5 +15,5 @@ let
   );
 in
 naersk.buildPackage {
-  src = ./.;
+  root = ./.;
 }
