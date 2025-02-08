@@ -51,13 +51,13 @@ pub mod proto;
 #[derive(Aargvark, Clone)]
 struct Args {
     /// Full path to primary compositor Wayland socket (like `/run/user/1000/wayland-0`)
-    #[vark(flag = "upstream")]
+    #[vark(flag = "--upstream")]
     upstream: PathBuf,
     /// Full path for new Wayland socket
-    #[vark(flag = "downstream")]
+    #[vark(flag = "--downstream")]
     downstream: PathBuf,
     /// Force all xdg toplevels to have the same app id
-    #[vark(flag = "app-id")]
+    #[vark(flag = "--app-id")]
     app_id: String,
     /// Prefix the app id instead of replacing
     prefix: Option<()>,
