@@ -1,4 +1,5 @@
 #![feature(unix_socket_ancillary_data)]
+
 use {
     aargvark::{
         vark,
@@ -48,20 +49,18 @@ use {
 pub mod proto;
 
 #[derive(Aargvark, Clone)]
-struct AppIdArgs {
-    id: String,
-    /// Prefix the app id instead of replacing
-    prefix: Option<()>,
-}
-
-#[derive(Aargvark, Clone)]
 struct Args {
     /// Full path to primary compositor Wayland socket (like `/run/user/1000/wayland-0`)
+    #[vark(flag = "upstream")]
     upstream: PathBuf,
     /// Full path for new Wayland socket
+    #[vark(flag = "downstream")]
     downstream: PathBuf,
     /// Force all xdg toplevels to have the same app id
-    app_id: Option<AppIdArgs>,
+    #[vark(flag = "app-id")]
+    app_id: String,
+    /// Prefix the app id instead of replacing
+    prefix: Option<()>,
     /// Print debug messages
     debug: Option<()>,
 }
@@ -154,21 +153,6 @@ fn main() {
         let _defer1 = defer::defer(|| {
             _ = remove_file(&args.downstream);
         });
-
-        // Only track what we need - set up a dependency graph
-        let mut track_xdg_wm_base = false;
-        let mut track_xdg_surface = false;
-        let mut track_xdg_toplevel = false;
-        if args.app_id.is_some() {
-            track_xdg_toplevel = true;
-            track_xdg_surface = true;
-        }
-        if track_xdg_surface {
-            track_xdg_toplevel = true;
-        }
-        if track_xdg_toplevel {
-            track_xdg_wm_base = true;
-        }
 
         // Listen for connections
         loop {
@@ -269,15 +253,13 @@ fn main() {
                                                         proto::read_arg_uint(
                                                             &mut cursor,
                                                         ).context("Error/eof reading bind object id")?;
-                                                    if track_xdg_wm_base {
-                                                        if let Some((want_type_id, _version)) =
-                                                            *xdgwmbase_type_id.lock().unwrap() {
-                                                            if obj_type_id == want_type_id {
-                                                                objects.insert(obj_id, ObjType::XdgWmBase {
-                                                                    // prefer the magic param version because it's nearer to the use location...
-                                                                    ver: version,
-                                                                });
-                                                            }
+                                                    if let Some((want_type_id, _version)) =
+                                                        *xdgwmbase_type_id.lock().unwrap() {
+                                                        if obj_type_id == want_type_id {
+                                                            objects.insert(obj_id, ObjType::XdgWmBase {
+                                                                // prefer the magic param version because it's nearer to the use location...
+                                                                ver: version,
+                                                            });
                                                         }
                                                     }
                                                 },
@@ -289,16 +271,12 @@ fn main() {
                                                 0 ..= 6 => match packet.opcode {
                                                     // Get surface
                                                     2 => {
-                                                        if track_xdg_surface {
-                                                            let mut cursor = Cursor::new(&packet.body);
-                                                            let obj_id =
-                                                                proto::read_arg_uint(
-                                                                    &mut cursor,
-                                                                ).context(
-                                                                    "Error reading xdg wm base create surface id",
-                                                                )?;
-                                                            objects.insert(obj_id, ObjType::XdgSurface { ver: ver });
-                                                        }
+                                                        let mut cursor = Cursor::new(&packet.body);
+                                                        let obj_id =
+                                                            proto::read_arg_uint(
+                                                                &mut cursor,
+                                                            ).context("Error reading xdg wm base create surface id")?;
+                                                        objects.insert(obj_id, ObjType::XdgSurface { ver: ver });
                                                     },
                                                     _ => (),
                                                 },
@@ -316,19 +294,14 @@ fn main() {
                                                 0 ..= 6 => match packet.opcode {
                                                     // Create toplevel
                                                     1 => {
-                                                        if track_xdg_toplevel {
-                                                            let mut cursor = Cursor::new(&packet.body);
-                                                            let obj_id =
-                                                                proto::read_arg_uint(
-                                                                    &mut cursor,
-                                                                ).context(
-                                                                    "Error reading xdg surface create toplevel id",
-                                                                )?;
-                                                            objects.insert(
-                                                                obj_id,
-                                                                ObjType::XdgToplevel { ver: ver },
-                                                            );
-                                                        }
+                                                        let mut cursor = Cursor::new(&packet.body);
+                                                        let obj_id =
+                                                            proto::read_arg_uint(
+                                                                &mut cursor,
+                                                            ).context(
+                                                                "Error reading xdg surface create toplevel id",
+                                                            )?;
+                                                        objects.insert(obj_id, ObjType::XdgToplevel { ver: ver });
                                                     },
                                                     _ => (),
                                                 },
@@ -340,25 +313,23 @@ fn main() {
                                                 0 ..= 6 => match packet.opcode {
                                                     // set_app_id => replace
                                                     3 => {
-                                                        if let Some(app_id) = &args.app_id {
-                                                            let read_app_id =
-                                                                read_arg_string(
-                                                                    &mut packet.body.as_slice(),
-                                                                ).context("Error reading app id message body")?;
-                                                            packet.body.clear();
-                                                            proto::write_arg_string(
-                                                                &mut packet.body,
-                                                                if app_id.prefix.is_some() {
-                                                                    format!(
-                                                                        "{}{}",
-                                                                        app_id.id,
-                                                                        read_app_id.unwrap_or_default()
-                                                                    )
-                                                                } else {
-                                                                    app_id.id.clone()
-                                                                },
-                                                            ).unwrap();
-                                                        }
+                                                        let read_app_id =
+                                                            read_arg_string(
+                                                                &mut packet.body.as_slice(),
+                                                            ).context("Error reading app id message body")?;
+                                                        packet.body.clear();
+                                                        proto::write_arg_string(
+                                                            &mut packet.body,
+                                                            if args.prefix.is_some() {
+                                                                format!(
+                                                                    "{}{}",
+                                                                    args.app_id,
+                                                                    read_app_id.unwrap_or_default()
+                                                                )
+                                                            } else {
+                                                                args.app_id.clone()
+                                                            },
+                                                        ).unwrap();
                                                     },
                                                     _ => (),
                                                 },

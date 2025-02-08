@@ -8,7 +8,7 @@ repository = "https://github.com/andrewbaxter/filterway"
 license = "ISC"
 
 [dependencies]
-aargvark = "0.2"
+aargvark = "0.7"
 defer = "0.2"
 libc = "0.2"
 rustix = { version = "0.38", features = ["fs"] }
