@@ -1,11 +1,8 @@
 # Filterway
 
-is a lightweight Wayland socket proxy that intercepts messages and filters/modifies them. You can use it for, for example, making all applications in a container have the same `app_id` (apply certain window decorations in certain containers).
+is a Wayland socket proxy that can rewrite `app_id` for any programs that use it's downstream socket. This allows you to write compositor decoration rules and other things for a set of programs based on the modified `app_id`.
 
-Current features:
-
-- Force `app_id` - assign all toplevels the same `app_id` and suppress client-originated `set_app_id` requests
-- Dump wayland protocol traffic
+This can both replace and prefix the `app_id`.
 
 # How to use it
 
@@ -15,7 +12,7 @@ Your main compositor will have created something like `/run/user/1000/wayland-0`
 
    Note, socket ancillary data (required by Wayland protocol) requires unstable rust currently. If you use `rustup` to manage rust it should read the `rust-toolchain.toml` file and compile accordingly.
 
-2. Run `filterway /run/user/1000/wayland-0 /run/user/1000/wayland-filtered org.example.testid`
+2. Run `filterway --upstream /run/user/1000/wayland-0 --downstream /run/user/1000/wayland-filtered --app-id org.example.testid`
 
    Run `filterway --help` for details.
 
