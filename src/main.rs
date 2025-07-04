@@ -18,6 +18,11 @@ use {
             OpenOptionsExt,
         },
     },
+    sd_notify::{
+        booted,
+        notify,
+        NotifyState,
+    },
     std::{
         collections::HashMap,
         fmt::Display,
@@ -153,6 +158,22 @@ fn main() {
         let _defer1 = defer::defer(|| {
             _ = remove_file(&args.downstream);
         });
+
+        // If the system booted with systemd,
+        // inform systemd that filterway is ready using notify.
+        // Other services that depend on filterway can start now.
+        if let Ok(sd_booted) = sd_notify::booted() {
+            if args.debug.is_some() {
+                eprintln!("Init detected as being systemd. Notifying of readiness.");
+            }
+            let ready_result = sd_notify::notify(true, &[NotifyState::Ready]);
+            match ready_result {
+                Ok(_) => { },
+                Err(e) => {
+                    eprintln!("Warning, failed to notify systemd with error: {}", e);
+                },
+            };
+        }
 
         // Listen for connections
         loop {
