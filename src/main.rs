@@ -19,8 +19,6 @@ use {
         },
     },
     sd_notify::{
-        booted,
-        notify,
         NotifyState,
     },
     std::{
@@ -63,9 +61,14 @@ struct Args {
     downstream: PathBuf,
     /// Force all xdg toplevels to have the same app id
     #[vark(flag = "--app-id")]
-    app_id: String,
+    app_id: Option<String>,
     /// Prefix the app id instead of replacing
     prefix: Option<()>,
+    /// Force all xdg toplevels to have the same title
+    #[vark(flag = "--title")]
+    title: Option<String>,
+    /// Prefix the title instead of replacing
+    prefix_title: Option<()>,
     /// Print debug messages
     debug: Option<()>,
 }
@@ -159,10 +162,9 @@ fn main() {
             _ = remove_file(&args.downstream);
         });
 
-        // If the system booted with systemd,
-        // inform systemd that filterway is ready using notify.
-        // Other services that depend on filterway can start now.
-        if let Ok(sd_booted) = sd_notify::booted() {
+        // If the system booted with systemd, inform systemd that filterway is ready using
+        // notify. Other services that depend on filterway can start now.
+        if let Ok(true) = sd_notify::booted() {
             if args.debug.is_some() {
                 eprintln!("Init detected as being systemd. Notifying of readiness.");
             }
@@ -332,25 +334,49 @@ fn main() {
                                         ObjType::XdgToplevel { ver } => {
                                             match ver {
                                                 0 ..= 6 => match packet.opcode {
-                                                    // set_app_id => replace
+                                                    // set_title
+                                                    2 => {
+                                                        if let Some(title) = &args.title {
+                                                            let read_title =
+                                                                read_arg_string(
+                                                                    &mut packet.body.as_slice(),
+                                                                ).context("Error reading app id message body")?;
+                                                            packet.body.clear();
+                                                            proto::write_arg_string(
+                                                                &mut packet.body,
+                                                                if args.prefix_title.is_some() {
+                                                                    format!(
+                                                                        "{}{}",
+                                                                        title,
+                                                                        read_title.unwrap_or_default()
+                                                                    )
+                                                                } else {
+                                                                    title.clone()
+                                                                },
+                                                            ).unwrap();
+                                                        }
+                                                    },
+                                                    // set_app_id
                                                     3 => {
-                                                        let read_app_id =
-                                                            read_arg_string(
-                                                                &mut packet.body.as_slice(),
-                                                            ).context("Error reading app id message body")?;
-                                                        packet.body.clear();
-                                                        proto::write_arg_string(
-                                                            &mut packet.body,
-                                                            if args.prefix.is_some() {
-                                                                format!(
-                                                                    "{}{}",
-                                                                    args.app_id,
-                                                                    read_app_id.unwrap_or_default()
-                                                                )
-                                                            } else {
-                                                                args.app_id.clone()
-                                                            },
-                                                        ).unwrap();
+                                                        if let Some(app_id) = &args.app_id {
+                                                            let read_app_id =
+                                                                read_arg_string(
+                                                                    &mut packet.body.as_slice(),
+                                                                ).context("Error reading app id message body")?;
+                                                            packet.body.clear();
+                                                            proto::write_arg_string(
+                                                                &mut packet.body,
+                                                                if args.prefix.is_some() {
+                                                                    format!(
+                                                                        "{}{}",
+                                                                        app_id,
+                                                                        read_app_id.unwrap_or_default()
+                                                                    )
+                                                                } else {
+                                                                    app_id.clone()
+                                                                },
+                                                            ).unwrap();
+                                                        }
                                                     },
                                                     _ => (),
                                                 },
