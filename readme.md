@@ -1,8 +1,11 @@
 # Filterway
 
-is a Wayland socket proxy that can rewrite `app_id` for any programs that use it's downstream socket. This allows you to write compositor decoration rules and other things for a set of programs based on the modified `app_id`.
+is a Wayland socket proxy that can do minor changes to messages for any programs that use it's downstream socket. This allows you to do things like create a proxy wayland socket to mount in a container and write compositor decoration rules that are specific the container windows.
 
-This can both replace and prefix the `app_id`.
+Current filters:
+
+- Replace or prefix `app_id` - this can help writing compositor rules targetting programs running on a filterway instance
+- Replace or prefix `title` - this may be helpful if nesting compositors, since compositors don't expect their title to be used and don't set useful titles.
 
 # How to use it
 
