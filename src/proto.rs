@@ -76,23 +76,22 @@ pub fn write_arg_uint(serial: &mut impl std::io::Write, data: u32) -> Result<(),
 }
 
 pub fn read_arg_string(serial: &mut impl std::io::Read) -> Result<Option<String>, &str> {
-    let header = read(serial, 4).map_err(|_| "string length")?;
-    let size = u32::from_ne_bytes(header[..].try_into().unwrap());
-    if size == 0 {
+    let header = read(serial, 4).map_err(|_| "null terminated string length")?;
+    let null_term_len = u32::from_ne_bytes(header[..].try_into().unwrap());
+    if null_term_len == 0 {
         return Ok(None);
     }
-    let mut body = read(serial, size as usize).map_err(|_| "string body")?;
-    let null = body.iter().enumerate().find(|(_, x)| **x == 0).ok_or("no null terminator")?.0;
-    body.truncate(null);
+    let mut body = read(serial, null_term_len.next_multiple_of(4) as usize).map_err(|_| "string body")?;
+    body.truncate(null_term_len as usize - 1);
     return Ok(Some(String::from_utf8(body).map_err(|_| "bad utf-8")?));
 }
 
 pub fn write_arg_string(serial: &mut impl std::io::Write, data: String) -> Result<(), &str> {
     let mut buf = data.into_bytes();
     buf.push(0);
-    let aligned_len = buf.len().next_multiple_of(4);
-    buf.resize(aligned_len, 0u8);
-    serial.write_all(&mut (aligned_len as u32).to_ne_bytes()).map_err(|_| "string length")?;
+    let null_term_len = buf.len();
+    buf.resize(buf.len().next_multiple_of(4), 0u8);
+    serial.write_all(&mut (null_term_len as u32).to_ne_bytes()).map_err(|_| "null terminated string length")?;
     serial.write_all(&mut buf).map_err(|_| "string body")?;
     return Ok(());
 }
