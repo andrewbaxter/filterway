@@ -354,6 +354,12 @@ fn main() {
                                                                     title.clone()
                                                                 },
                                                             ).unwrap();
+                                                            if args.debug.is_some() {
+                                                                eprintln!(
+                                                                    "Modified title; new message: {:?}",
+                                                                    packet
+                                                                );
+                                                            }
                                                         }
                                                     },
                                                     // set_app_id
@@ -376,6 +382,12 @@ fn main() {
                                                                     app_id.clone()
                                                                 },
                                                             ).unwrap();
+                                                            if args.debug.is_some() {
+                                                                eprintln!(
+                                                                    "Modified app id; new message: {:?}",
+                                                                    packet
+                                                                );
+                                                            }
                                                         }
                                                     },
                                                     _ => (),
