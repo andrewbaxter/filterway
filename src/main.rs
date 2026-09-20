@@ -62,7 +62,7 @@ struct Args {
     /// Force all xdg toplevels to have the same app id
     app_id: Option<String>,
     /// Prefix the app id instead of replacing
-    prefix_app_id: Option<()>,
+    prefix: Option<()>,
     /// Prefix the PID of the connection into the app id. This comes after the main app id prefix.
     prefix_pid_app_id: Option<String>,
     /// Force all xdg toplevels to have the same title
@@ -131,7 +131,7 @@ fn filter_string(
 fn make_app_id(args: &Args, client_pid: Option<u32>, original: Option<String>) -> Option<String> {
     return filter_string(
         &args.app_id,
-        args.prefix_app_id.is_some(),
+        args.prefix.is_some(),
         &args.prefix_pid_app_id,
         client_pid,
         original,
