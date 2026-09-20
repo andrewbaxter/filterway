@@ -4,7 +4,10 @@ is a Wayland socket proxy that can do minor changes to messages for any programs
 
 Current filters:
 
-- Replace or prefix `app_id` - this can help writing compositor rules targetting programs running on a filterway instance
+- Replace `app_id` - this can help writing compositor rules targetting programs running on a filterway instance
+- Prefix `app_id`
+- Prefix `app_id` with the client PID - if the compositor needs PIDs, without this it will only see the filterway PID
+- Same for namespaces (e.g. for layer shell windows which have no app id)
 - Replace or prefix `title` - this may be helpful if nesting compositors, since compositors don't expect their title to be used and don't set useful titles.
 
 # How to use it

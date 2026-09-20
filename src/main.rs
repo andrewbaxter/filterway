@@ -60,17 +60,92 @@ struct Args {
     #[vark(flag = "--downstream")]
     downstream: PathBuf,
     /// Force all xdg toplevels to have the same app id
-    #[vark(flag = "--app-id")]
     app_id: Option<String>,
     /// Prefix the app id instead of replacing
-    prefix: Option<()>,
+    prefix_app_id: Option<()>,
+    /// Prefix the PID of the connection into the app id. This comes after the main app id prefix.
+    prefix_pid_app_id: Option<String>,
     /// Force all xdg toplevels to have the same title
-    #[vark(flag = "--title")]
     title: Option<String>,
     /// Prefix the title instead of replacing
     prefix_title: Option<()>,
-    /// Print debug messages
+    /// Force all layer surfaces to have the same namespace
+    namespace: Option<String>,
+    /// Prefix the namespace instead of replacing
+    prefix_namespace: Option<()>,
+    /// Prefix the PID of the connection into the layer surface namespace. This comes after the main namespace prefix.
+    prefix_pid_namespace: Option<String>,
+    /// Hide the layer shell global from the client, and disconnect any client that binds it anyway
+    reject_layer_shell: Option<()>,
+    /// Log Wayland protocol messages
     debug: Option<()>,
+}
+
+fn peer_pid(stream: &UnixStream) -> Option<u32> {
+    use std::os::unix::io::AsRawFd;
+    let mut cred = libc::ucred {
+        pid: 0,
+        uid: 0,
+        gid: 0,
+    };
+    let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+    let ret = unsafe {
+        libc::getsockopt(
+            stream.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_PEERCRED,
+            &mut cred as *mut libc::ucred as *mut libc::c_void,
+            &mut len,
+        )
+    };
+    if ret == 0 && cred.pid > 0 {
+        Some(cred.pid as u32)
+    } else {
+        None
+    }
+}
+
+fn filter_string(
+    force: &Option<String>,
+    prefix: bool,
+    pid_template: &Option<String>,
+    client_pid: Option<u32>,
+    original: Option<String>,
+) -> Option<String> {
+    let base = match force {
+        Some(f) => Some(if prefix {
+            format!("{}{}", f, original.unwrap_or_default())
+        } else {
+            f.clone()
+        }),
+        None => original,
+    };
+    match (pid_template, client_pid) {
+        (Some(template), Some(pid)) => {
+            Some(format!("{}{}", template.replace("{}", &pid.to_string()), base.unwrap_or_default()))
+        },
+        _ => base,
+    }
+}
+
+fn make_app_id(args: &Args, client_pid: Option<u32>, original: Option<String>) -> Option<String> {
+    return filter_string(
+        &args.app_id,
+        args.prefix_app_id.is_some(),
+        &args.prefix_pid_app_id,
+        client_pid,
+        original,
+    );
+}
+
+fn make_namespace(args: &Args, client_pid: Option<u32>, original: Option<String>) -> Option<String> {
+    return filter_string(
+        &args.namespace,
+        args.prefix_namespace.is_some(),
+        &args.prefix_pid_namespace,
+        client_pid,
+        original,
+    );
 }
 
 trait Errorize<T> {
@@ -181,6 +256,15 @@ fn main() {
         loop {
             let (downstream, _) = downstream.accept().context("Error accepting downstream connection")?;
             let upstream = UnixStream::connect(&args.upstream).context("Error creating upstream connection")?;
+            let client_pid = if args.prefix_pid_app_id.is_some() || args.prefix_pid_namespace.is_some() {
+                let pid = peer_pid(&downstream);
+                if args.debug.is_some() {
+                    eprintln!("Downstream connection peer pid: {:?}", pid);
+                }
+                pid
+            } else {
+                None
+            };
 
             #[derive(Clone, Copy, Debug)]
             enum ObjType {
@@ -195,17 +279,21 @@ fn main() {
                 XdgToplevel {
                     ver: u32,
                 },
+                ZwlrLayerShell,
             }
 
             let objects = Arc::new(Mutex::new(HashMap::new()));
             objects.lock().unwrap().insert(1, ObjType::Display);
             let xdgwmbase_type_id = Arc::new(Mutex::new(None));
+            let layer_shell_type_id = Arc::new(Mutex::new(None));
             spawn({
                 let downstream = downstream.try_clone().unwrap();
                 let mut upstream = upstream.try_clone().unwrap();
                 let objects = objects.clone();
                 let xdgwmbase_type_id = xdgwmbase_type_id.clone();
+                let layer_shell_type_id = layer_shell_type_id.clone();
                 let args = args.clone();
+                let client_pid = client_pid;
                 move || {
                     let _defer = defer::defer({
                         let downstream = downstream.try_clone().unwrap();
@@ -268,7 +356,18 @@ fn main() {
                                                         ).context("Error/eof reading bind object type id")?;
 
                                                     // Arbitrary snowflake magic param - interface name
-                                                    proto::read_arg_string(&mut cursor).context("Error reading bind message type string")?;
+                                                    let interface = proto::read_arg_string(&mut cursor).context("Error reading bind message type string")?;
+
+                                                    // The interface name is in the bind itself, so this
+                                                    // catches a client that guesses the global's name
+                                                    // before we've seen the global event for it.
+                                                    if args.reject_layer_shell.is_some() &&
+                                                        interface.as_ref().map(|x| x.as_str()) ==
+                                                            Some("zwlr_layer_shell_v1") {
+                                                        return Err(
+                                                            "Client bound zwlr_layer_shell_v1, which is rejected by --reject-layer-shell".to_string(),
+                                                        );
+                                                    }
 
                                                     // Arbitrary snowflake magic param - version
                                                     let version = proto::read_arg_uint(&mut cursor).context("Error reading bind message version")?;
@@ -283,6 +382,12 @@ fn main() {
                                                                 // prefer the magic param version because it's nearer to the use location...
                                                                 ver: version,
                                                             });
+                                                        }
+                                                    }
+                                                    if let Some((want_type_id, _version)) =
+                                                        *layer_shell_type_id.lock().unwrap() {
+                                                        if obj_type_id == want_type_id {
+                                                            objects.insert(obj_id, ObjType::ZwlrLayerShell);
                                                         }
                                                     }
                                                 },
@@ -326,18 +431,20 @@ fn main() {
                                                             )?;
                                                         objects.insert(obj_id, ObjType::XdgToplevel { ver: ver });
 
-                                                        if let Some(app_id) = &args.app_id {
-                                                            let mut body = vec![];
-                                                            proto::write_arg_string(
-                                                                &mut body,
-                                                                app_id.clone(),
-                                                            )
-                                                            .unwrap();
-                                                            send_extra.push(proto::Packet {
-                                                                id: obj_id,
-                                                                opcode: 3,
-                                                                body: body,
-                                                            });
+                                                        if args.app_id.is_some() || args.prefix_pid_app_id.is_some() {
+                                                            if let Some(new_app_id) =
+                                                                make_app_id(&args, client_pid, None) {
+                                                                let mut body = vec![];
+                                                                proto::write_arg_string(
+                                                                    &mut body,
+                                                                    new_app_id,
+                                                                ).unwrap();
+                                                                send_extra.push(proto::Packet {
+                                                                    id: obj_id,
+                                                                    opcode: 3,
+                                                                    body: body,
+                                                                });
+                                                            }
                                                         }
 
                                                         if let Some(title) = &args.title {
@@ -392,7 +499,7 @@ fn main() {
                                                     },
                                                     // set_app_id
                                                     3 => {
-                                                        if let Some(app_id) = &args.app_id {
+                                                        if args.app_id.is_some() || args.prefix_pid_app_id.is_some() {
                                                             let read_app_id =
                                                                 read_arg_string(
                                                                     &mut packet.body.as_slice(),
@@ -400,15 +507,8 @@ fn main() {
                                                             packet.body.clear();
                                                             proto::write_arg_string(
                                                                 &mut packet.body,
-                                                                if args.prefix.is_some() {
-                                                                    format!(
-                                                                        "{}{}",
-                                                                        app_id,
-                                                                        read_app_id.unwrap_or_default()
-                                                                    )
-                                                                } else {
-                                                                    app_id.clone()
-                                                                },
+                                                                make_app_id(&args, client_pid, read_app_id)
+                                                                    .unwrap_or_default(),
                                                             ).unwrap();
                                                             if args.debug.is_some() {
                                                                 eprintln!(
@@ -421,6 +521,47 @@ fn main() {
                                                     _ => (),
                                                 },
                                                 _ => panic!("Unsupported xdg_toplevel object version {}", ver),
+                                            }
+                                        },
+                                        ObjType::ZwlrLayerShell => {
+                                            // get_layer_surface
+                                            if packet.opcode == 0 {
+                                                if args.namespace.is_some() ||
+                                                    args.prefix_pid_namespace.is_some() {
+                                                    let mut cursor = Cursor::new(&packet.body);
+                                                    let id =
+                                                        proto::read_arg_uint(&mut cursor)
+                                                            .context("Error reading layer surface id")?;
+                                                    let wl_surface =
+                                                        proto::read_arg_uint(&mut cursor)
+                                                            .context("Error reading layer surface surface")?;
+                                                    let output =
+                                                        proto::read_arg_uint(&mut cursor)
+                                                            .context("Error reading layer surface output")?;
+                                                    let layer =
+                                                        proto::read_arg_uint(&mut cursor)
+                                                            .context("Error reading layer surface layer")?;
+                                                    let namespace =
+                                                        read_arg_string(&mut cursor)
+                                                            .context("Error reading layer surface namespace")?;
+                                                    let mut body = vec![];
+                                                    proto::write_arg_uint(&mut body, id).unwrap();
+                                                    proto::write_arg_uint(&mut body, wl_surface).unwrap();
+                                                    proto::write_arg_uint(&mut body, output).unwrap();
+                                                    proto::write_arg_uint(&mut body, layer).unwrap();
+                                                    proto::write_arg_string(
+                                                        &mut body,
+                                                        make_namespace(&args, client_pid, namespace)
+                                                            .unwrap_or_default(),
+                                                    ).unwrap();
+                                                    packet.body = body;
+                                                    if args.debug.is_some() {
+                                                        eprintln!(
+                                                            "Modified layer surface namespace; new message: {:?}",
+                                                            packet
+                                                        );
+                                                    }
+                                                }
                                             }
                                         },
                                     }
@@ -488,6 +629,7 @@ fn main() {
                             }
 
                             // Tracking and manipulation
+                            let mut hide_packet = false;
                             match (packet.id, packet.opcode) {
                                 // Ack delete, hardcoded display
                                 (1, 1) => {
@@ -530,15 +672,30 @@ fn main() {
                                         if type_str.as_ref().map(|x| x.as_str()) == Some("xdg_wm_base") {
                                             *xdgwmbase_type_id.lock().unwrap() = Some((type_id, version));
                                         }
+                                        if type_str.as_ref().map(|x| x.as_str()) == Some("zwlr_layer_shell_v1") {
+                                            *layer_shell_type_id.lock().unwrap() = Some((type_id, version));
+                                            if args.reject_layer_shell.is_some() {
+                                                hide_packet = true;
+                                                if args.debug.is_some() {
+                                                    eprintln!("Hiding zwlr_layer_shell_v1 global from client");
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             }
 
                             // Forward messages
-                            proto::write_packet(
-                                &mut AncillaryWriter::new(&mut downstream, &mut ancillary_mem, &ancillary_accum),
-                                &packet,
-                            ).context("Error writing message")?;
+                            if !hide_packet {
+                                proto::write_packet(
+                                    &mut AncillaryWriter::new(
+                                        &mut downstream,
+                                        &mut ancillary_mem,
+                                        &ancillary_accum,
+                                    ),
+                                    &packet,
+                                ).context("Error writing message")?;
+                            }
                             for fd in ancillary_accum.drain(..) {
                                 drop(unsafe {
                                     OwnedFd::from_raw_fd(fd)
