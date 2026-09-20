@@ -8,6 +8,7 @@ Current filters:
 - Prefix `app_id`
 - Prefix `app_id` with the client PID - if the compositor needs PIDs, without this it will only see the filterway PID
 - Same for namespaces (e.g. for layer shell windows which have no app id)
+- Block layer shell
 - Replace or prefix `title` - this may be helpful if nesting compositors, since compositors don't expect their title to be used and don't set useful titles.
 
 # How to use it
